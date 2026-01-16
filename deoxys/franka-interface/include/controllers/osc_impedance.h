@@ -14,6 +14,10 @@ protected:
   Eigen::Matrix<double, 3, 3> Kp_p, Kp_r, Kd_p, Kd_r, Ki_p, Ki_r;
   Eigen::Vector3d pos_error_sum, ori_error_sum;
 
+  Eigen::Vector3d last_desired_pos_;
+  Eigen::Quaterniond last_desired_quat_;
+  bool first_step_ = true;
+
   Eigen::Matrix<double, 7, 1> residual_mass_vec_;
 
   Eigen::Matrix<double, 7, 1> static_q_task_;

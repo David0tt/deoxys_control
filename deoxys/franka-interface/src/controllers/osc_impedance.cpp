@@ -27,6 +27,7 @@ namespace controller {
 OSCImpedanceController::OSCImpedanceController() {
   pos_error_sum.setZero();
   ori_error_sum.setZero();
+  first_step_ = true;
 }
 OSCImpedanceController::~OSCImpedanceController() {}
 
@@ -34,6 +35,7 @@ OSCImpedanceController::OSCImpedanceController(franka::Model &model) {
   model_ = &model;
   pos_error_sum.setZero();
   ori_error_sum.setZero();
+  first_step_ = true;
 }
 
 bool OSCImpedanceController::ParseMessage(const FrankaControlMessage &msg) {
@@ -57,9 +59,13 @@ bool OSCImpedanceController::ParseMessage(const FrankaControlMessage &msg) {
   Kd_p << Kp_p.cwiseSqrt() * 2.0;
   Kd_r << Kp_r.cwiseSqrt() * 2.0;
 
-  // Hardcoded Ki gains for PID controller
-  Ki_p.diagonal() << 0.03, 0.03, 0.03;
-  Ki_r.diagonal() << 0.03, 0.03, 0.03;
+  // Hardcoded Ki gains for PID controller (scaled for dt=0.001)
+  Ki_p.diagonal() << 100.0, 100.0, 100.0;
+  Ki_r.diagonal() << 100.0, 100.0, 100.0;
+
+  // Ki_p.diagonal() << 0.0, 0.0, 0.0;
+  // Ki_r.diagonal() << 0.0, 0.0, 0.0;
+
 
   static_q_task_ << 0.09017809387254755, -0.9824203501652151,
       0.030509718397568178, -2.694229634937343, 0.057700675144720104,
@@ -179,6 +185,26 @@ std::array<double, 7> OSCImpedanceController::Step(
     quat_EE_in_base_frame.coeffs() << -quat_EE_in_base_frame.coeffs();
   }
 
+  // Integral reset logic on goal change
+  if (first_step_) {
+    last_desired_pos_ = desired_pos_EE_in_base_frame;
+    last_desired_quat_ = desired_quat_EE_in_base_frame;
+    first_step_ = false;
+  }
+
+  double pos_goal_change =
+      (desired_pos_EE_in_base_frame - last_desired_pos_).norm();
+  double quat_dot = std::abs(
+      desired_quat_EE_in_base_frame.coeffs().dot(last_desired_quat_.coeffs()));
+  double rot_goal_change = 2.0 * std::acos(std::min(1.0, quat_dot));
+
+  if (pos_goal_change > 0.01 || rot_goal_change > 0.05) {
+    pos_error_sum.setZero();
+    ori_error_sum.setZero();
+  }
+  last_desired_pos_ = desired_pos_EE_in_base_frame;
+  last_desired_quat_ = desired_quat_EE_in_base_frame;
+
   Eigen::Vector3d pos_error;
 
   pos_error << desired_pos_EE_in_base_frame - pos_EE_in_base_frame;
@@ -217,8 +243,32 @@ std::array<double, 7> OSCImpedanceController::Step(
   ori_error =
       ori_error.unaryExpr([](double x) { return (abs(x) < 5e-3) ? 0. : x; });
 
-  pos_error_sum += pos_error;
-  ori_error_sum += ori_error;
+  std::cout << "pos_error: " << pos_error.transpose() << std::endl;
+  std::cout << "ori_error: " << ori_error.transpose() << std::endl;
+
+  // Integral term with I-Zone and I-Max (Anti-windup)
+  // This check may not be too small, since if there was an integral term in the last step, and there is some robot momentum, we still have some movement -> this perpetuates movement / error
+  if (pos_error.norm() < 0.001) {
+    pos_error_sum.setZero();
+  // } else if (pos_error.norm() < 0.05) {
+  } else if (pos_error.norm() < 2.0) {
+    // pos_error_sum += pos_error * 0.001;
+    pos_error_sum = pos_error_sum * 0.999 + pos_error * 0.001;
+    pos_error_sum = pos_error_sum.cwiseMin(0.02).cwiseMax(-0.02);
+  } else {
+    pos_error_sum.setZero();
+  }
+
+  if (ori_error.norm() < 0.001) {
+    ori_error_sum.setZero();
+  // } else if (ori_error.norm() < 0.5) {
+  } else if (ori_error.norm() < 2.0) {
+    // ori_error_sum += ori_error * 0.001;
+    ori_error_sum = ori_error_sum * 0.999 + ori_error * 0.001;
+    ori_error_sum = ori_error_sum.cwiseMin(0.05).cwiseMax(-0.05);
+  } else {
+    ori_error_sum.setZero();
+  }
 
   tau_d << jacobian_pos.transpose() *
                    (Lambda_pos *
