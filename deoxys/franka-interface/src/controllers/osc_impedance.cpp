@@ -24,11 +24,16 @@
 #include <memory>
 
 namespace controller {
-OSCImpedanceController::OSCImpedanceController() {}
+OSCImpedanceController::OSCImpedanceController() {
+  pos_error_sum.setZero();
+  ori_error_sum.setZero();
+}
 OSCImpedanceController::~OSCImpedanceController() {}
 
 OSCImpedanceController::OSCImpedanceController(franka::Model &model) {
   model_ = &model;
+  pos_error_sum.setZero();
+  ori_error_sum.setZero();
 }
 
 bool OSCImpedanceController::ParseMessage(const FrankaControlMessage &msg) {
@@ -51,6 +56,10 @@ bool OSCImpedanceController::ParseMessage(const FrankaControlMessage &msg) {
       kp_rotation_array.data());
   Kd_p << Kp_p.cwiseSqrt() * 2.0;
   Kd_r << Kp_r.cwiseSqrt() * 2.0;
+
+  // Hardcoded Ki gains for PID controller
+  Ki_p.diagonal() << 0.03, 0.03, 0.03;
+  Ki_r.diagonal() << 0.03, 0.03, 0.03;
 
   static_q_task_ << 0.09017809387254755, -0.9824203501652151,
       0.030509718397568178, -2.694229634937343, 0.057700675144720104,
@@ -208,12 +217,17 @@ std::array<double, 7> OSCImpedanceController::Step(
   ori_error =
       ori_error.unaryExpr([](double x) { return (abs(x) < 5e-3) ? 0. : x; });
 
+  pos_error_sum += pos_error;
+  ori_error_sum += ori_error;
+
   tau_d << jacobian_pos.transpose() *
                    (Lambda_pos *
-                    (Kp_p * pos_error - Kd_p * (jacobian_pos * current_dq))) +
+                    (Kp_p * pos_error + Ki_p * pos_error_sum -
+                     Kd_p * (jacobian_pos * current_dq))) +
                jacobian_ori.transpose() *
                    (Lambda_ori *
-                    (Kp_r * ori_error - Kd_r * (jacobian_ori * current_dq)));
+                    (Kp_r * ori_error + Ki_r * ori_error_sum -
+                     Kd_r * (jacobian_ori * current_dq)));
 
   // nullspace control
   tau_d << tau_d + Nullspace * (static_q_task_ - current_q);

@@ -11,7 +11,8 @@ namespace controller {
 class OSCImpedanceController : public BaseController {
 protected:
   FrankaOSCPoseControllerMessage control_msg_;
-  Eigen::Matrix<double, 3, 3> Kp_p, Kp_r, Kd_p, Kd_r;
+  Eigen::Matrix<double, 3, 3> Kp_p, Kp_r, Kd_p, Kd_r, Ki_p, Ki_r;
+  Eigen::Vector3d pos_error_sum, ori_error_sum;
 
   Eigen::Matrix<double, 7, 1> residual_mass_vec_;
 
